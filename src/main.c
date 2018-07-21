@@ -42,12 +42,16 @@
 #include <stdbool.h>
 #include "wm8731_drive.h"
 #include "wm8731_conf.h"
+#include "stm32_adafruit_sd.h"
+#include "ff.h"
 
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
 
 /* Private variables ---------------------------------------------------------*/
+
+#define FRAME_SIZE 8000
 
 SPI_HandleTypeDef hspi3;
 
@@ -58,10 +62,16 @@ DMA_HandleTypeDef hdma_spi3_rx;
 uint16_t bufferTx[12];
 uint16_t bufferRx[12];
 
-uint16_t frameBuffer[10];
-uint8_t frameCount = 0;
+SHORT frameBuffer[FRAME_SIZE];
+uint8_t frameCount = 1;
 uint8_t frameIndex = 0;
 bool endFrame = false;
+
+#define FILENAME "audio.pcm"
+
+//static uint32_t ms_ticks; /**< 1ms timeticks counter */
+static FATFS fs; /**< FatFs work area needed for each volume */
+static FIL fp; /**< File object needed for each open file */
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
@@ -76,6 +86,10 @@ static void MX_SPI3_Init(void);
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
+
+DWORD get_fattime(void) {
+	return ((DWORD) (2018 - 1980) << 25 | (DWORD) 06 << 21 | (DWORD) 24 << 16);
+}
 
 void WM8731_Activate() {
 	WM8731_CMD(WM8731_REG_ACTIVE_CTRL, _WM8731_Activate);
@@ -120,6 +134,17 @@ int main(void) {
 
 	/* USER CODE END SysInit */
 
+	if (f_mount(&fs, "", 0) != FR_OK) {
+	}
+
+	/* Create/open a file, then write a string and close it */
+	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_OPEN_ALWAYS) == FR_OK) {
+		UINT num_read = 0;
+		FRESULT res = f_read(&fp, frameBuffer, FRAME_SIZE, &num_read);
+		f_close(&fp);
+
+	}
+
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
 
@@ -155,10 +180,8 @@ int main(void) {
 
 	HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*) bufferTx,
 			(uint8_t*) bufferRx, sizeof(bufferTx) / 2);
-
 	/* USER CODE BEGIN 3 */
 
-//	}
 	/* USER CODE END 3 */
 
 	while (1) {
@@ -424,7 +447,14 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 //		frameBuffer[0] = bufferRx[0];
 //	} else {
 //	bufferTx[11] = bufferRx[11];
-	bufferTx[11] = bufferRx[11];
+	if (frameCount % 2 == 0) {
+		if (frameIndex < FRAME_SIZE) {
+			bufferTx[11] = frameBuffer[frameIndex++];
+		} else {
+			bufferTx[11] = 0;
+		}
+	}
+	frameCount++;
 //	}
 	//HAL_GPIO_DeInit(GPIOA, GPIO_PIN_4);
 	GPIOF->ODR ^= GPIO_PIN_12;
