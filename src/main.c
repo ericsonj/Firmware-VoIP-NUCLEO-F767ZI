@@ -38,12 +38,14 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f7xx_hal.h"
+#include "stm32f7xx_nucleo_144.h"
 #include <string.h>
 #include <stdbool.h>
 #include "wm8731_drive.h"
 #include "wm8731_conf.h"
 #include "stm32_adafruit_sd.h"
 #include "ff.h"
+#include "circbuffer.h"
 
 /* USER CODE BEGIN Includes */
 
@@ -51,23 +53,35 @@
 
 /* Private variables ---------------------------------------------------------*/
 
-#define FRAME_SIZE 8000
+#define FRAME_SIZE 160
+#define AUDIO_BUFFER_SIZE 10
+#define FILENAME "audio.raw"
 
 SPI_HandleTypeDef hspi3;
 
 DMA_HandleTypeDef hdma_spi3_tx;
-
 DMA_HandleTypeDef hdma_spi3_rx;
 
 uint16_t bufferTx[12];
 uint16_t bufferRx[12];
 
-SHORT frameBuffer[FRAME_SIZE];
-uint8_t frameCount = 1;
-uint8_t frameIndex = 0;
-bool endFrame = false;
+SHORT audioFrame[FRAME_SIZE];
+SHORT audioFrame1[FRAME_SIZE];
 
-#define FILENAME "audio.pcm"
+circ_buffer_t circ_buffer;
+
+typedef struct {
+	SHORT audioFrame[FRAME_SIZE];
+} frame_t;
+
+frame_t AudioBuffer[AUDIO_BUFFER_SIZE];
+
+uint32_t frameCount = 1;
+uint32_t icount = 1;
+uint32_t frameIndex = 0;
+uint8_t bufferId = 0;
+bool bufferReady = false;
+bool endFrame = false;
 
 //static uint32_t ms_ticks; /**< 1ms timeticks counter */
 static FATFS fs; /**< FatFs work area needed for each volume */
@@ -110,6 +124,7 @@ void WM8731_Deactivate() {
  *
  * @retval None
  */
+
 int main(void) {
 	/* USER CODE BEGIN 1 */
 
@@ -118,7 +133,12 @@ int main(void) {
 	/* MCU Configuration----------------------------------------------------------*/
 	bzero(bufferRx, sizeof(bufferRx));
 	bzero(bufferTx, sizeof(bufferTx));
-	bufferTx[11] = 0xFFFF;
+	bzero(audioFrame, sizeof(audioFrame));
+
+	bufferTx[11] = 0x8001;
+
+	CIRC_BUFFER_Init(&circ_buffer, AudioBuffer, sizeof(AudioBuffer[0]),
+	AUDIO_BUFFER_SIZE);
 
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
@@ -133,17 +153,6 @@ int main(void) {
 	/* USER CODE BEGIN SysInit */
 
 	/* USER CODE END SysInit */
-
-	if (f_mount(&fs, "", 0) != FR_OK) {
-	}
-
-	/* Create/open a file, then write a string and close it */
-	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_OPEN_ALWAYS) == FR_OK) {
-		UINT num_read = 0;
-		FRESULT res = f_read(&fp, frameBuffer, FRAME_SIZE, &num_read);
-		f_close(&fp);
-
-	}
 
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
@@ -165,6 +174,8 @@ int main(void) {
 	WM8731_CMD(WM8731_REG_DIGITAL_IF, _WM8731_DAIF);		// Digital interface
 	WM8731_CMD(WM8731_REG_SAMPLING_CTRL, _WM8731_Sampling);	// Sampling control
 
+	WM8731_Activate();
+
 	MX_DMA_Init();
 	MX_SPI3_Init();
 	/* USER CODE BEGIN 2 */
@@ -174,15 +185,46 @@ int main(void) {
 	/* USER CODE BEGIN WHILE */
 	/* USER CODE END WHILE */
 
-	WM8731_Activate();
-	while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET) {
+	if (f_mount(&fs, "", 0) != FR_OK) {
 	}
 
-	HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*) bufferTx,
-			(uint8_t*) bufferRx, sizeof(bufferTx) / 2);
-	/* USER CODE BEGIN 3 */
+//	SHORT buff[512];
+	/* Create/open a file, then write a string and close it */
+	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_OPEN_ALWAYS) == FR_OK) {
+		UINT num_read = 0;
 
-	/* USER CODE END 3 */
+		frame_t frame;
+		FRESULT res = f_read(&fp, frame.audioFrame, FRAME_SIZE * 2, &num_read);
+		CIRC_BUFFER_push(&circ_buffer, &frame);
+
+		while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET) {
+		}
+
+		HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*) bufferTx,
+				(uint8_t*) bufferRx, sizeof(bufferTx) / 2);
+
+//		for (int i = 0; i < 100; i++) {
+		do {
+
+			res = f_read(&fp, frame.audioFrame, FRAME_SIZE * 2, &num_read);
+			bool canPush = false;
+			while (!canPush) {
+				canPush = CIRC_BUFFER_hasSpace(&circ_buffer);
+				if (canPush) {
+					CIRC_BUFFER_push(&circ_buffer, &frame);
+				} else {
+					HAL_Delay(5);
+				}
+			}
+//	}
+
+		} while (num_read == FRAME_SIZE * 2);
+
+		f_close(&fp);
+	}
+
+	BSP_LED_Init(LED_GREEN);
+	BSP_LED_On(LED_GREEN);
 
 	while (1) {
 	}
@@ -429,34 +471,27 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct2.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
 	HAL_GPIO_Init(GPIOF, &GPIO_InitStruct2);
 
-	GPIO_InitTypeDef GPIO_InitStruct3;
-	GPIO_InitStruct3.Mode = GPIO_MODE_IT_RISING;
-	GPIO_InitStruct3.Pull = GPIO_NOPULL;
-	GPIO_InitStruct3.Pin = GPIO_PIN_0;
-	GPIO_InitStruct3.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct3);
-
-	HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(EXTI0_IRQn);
-
 }
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 
-//	if (frameCount % 2 == 0) {
-//		frameBuffer[0] = bufferRx[0];
-//	} else {
-//	bufferTx[11] = bufferRx[11];
-	if (frameCount % 2 == 0) {
-		if (frameIndex < FRAME_SIZE) {
-			bufferTx[11] = frameBuffer[frameIndex++];
+	if (frameIndex >= 160) {
+		frame_t frame;
+		int32_t err = CIRC_BUFFER_pop(&circ_buffer, &frame);
+		if (err == ACTION_BUFFER_OK) {
+			memcpy(audioFrame, frame.audioFrame, 320);
 		} else {
-			bufferTx[11] = 0;
+			bzero(audioFrame, sizeof(audioFrame));
 		}
+		frameIndex = 0;
 	}
-	frameCount++;
-//	}
-	//HAL_GPIO_DeInit(GPIOA, GPIO_PIN_4);
+
+	if (icount % 2 == 0) {
+		bufferTx[11] = audioFrame[frameIndex];
+		frameIndex++;
+	}
+	icount++;
+
 	GPIOF->ODR ^= GPIO_PIN_12;
 }
 
@@ -465,12 +500,12 @@ void HAL_SPI_TxRxHalfCpltCallback(SPI_HandleTypeDef *hspi) {
 //	GPIOF->ODR ^= GPIO_PIN_12;
 }
 
-void EXTI0_IRQHandler(void) {
-	if ((EXTI->PR & 0x0001) == 0x0001) {
-//		GPIOF->ODR ^= GPIO_PIN_12;
-		EXTI->PR = 0x0001;
-	}
-}
+//void EXTI0_IRQHandler(void) {
+//	if ((EXTI->PR & 0x0001) == 0x0001) {
+////		GPIOF->ODR ^= GPIO_PIN_12;
+//		EXTI->PR = 0x0001;
+//	}
+//}
 
 /* USER CODE BEGIN 4 */
 
