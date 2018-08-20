@@ -1,1 +1,3 @@
 Debug/
+CMSIS/*
+HAL_Driver/*
