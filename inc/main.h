@@ -68,6 +68,12 @@ void _Error_Handler(char *, int);
 
 #define Error_Handler() _Error_Handler(__FILE__, __LINE__)
 
+#define STLK_RX_Pin GPIO_PIN_10
+#define STLK_RX_GPIO_Port GPIOB
+#define STLK_TX_Pin GPIO_PIN_11
+#define STLK_TX_GPIO_Port GPIOB
+
+
 #ifdef __cplusplus
 }
 #endif
