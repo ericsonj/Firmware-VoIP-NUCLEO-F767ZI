@@ -222,9 +222,9 @@ int main(void) {
 	uint8_t rtpFrameRx[172];
 	RTP_AddHeader(rtpFrame);
 
+
 	while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET) {
 	}
-
 	HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*) bufferTx,
 			(uint8_t*) bufferRx, sizeof(bufferTx) / 2);
 
@@ -239,48 +239,21 @@ int main(void) {
 
 		for (int i = 0; i < 1800;) {
 
-//			HAL_UART_Init(&huart3);
-//		bzero(rtpFrameRx, 172);
-//		HAL_StatusTypeDef resprx;
-//		resprx = HAL_UART_Receive(&huart3, (uint8_t*) rtpFrameRx, 172, 20);
-//		if (resprx == HAL_OK && rtpFrameRx[0] == 0x80) {
-//			memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
-//			alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
-//			CIRC_BUFFER_push(&circ_buffer, &frame);
-//		}
-
-			for (int i = 0; i < 172; ++i) {
-				rtpFrameRx[i] = 0;
-			}
-
 			int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
 			if (err == ACTION_BUFFER_OK) {
 				frameToAlaw(alaw, frameMic.audioFrame, FRAME_SIZE);
 				RTP_AddVarHeader(rtpFrame);
 				memcpy(rtpFrame + 12, alaw, FRAME_SIZE);
-				HAL_UART_Init(&huart3);
-				HAL_UART_Transmit(&huart3, (uint8_t*) rtpFrame, 172, 5);
-				HAL_StatusTypeDef res;
-				res = HAL_UART_Receive(&huart3, (uint8_t*) rtpFrameRx, 172, 15);
-				HAL_Delay(5);
-				if (res == HAL_OK) {
-					if (rtpFrame[0] == 0x80) {
-						memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
-						f_write(&fp, rtpFrameRx, 172, &num_write);
-						alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
-						CIRC_BUFFER_push(&circ_buffer, &frame);
-					} else {
-						BSP_LED_On(LED_RED);
-					}
-					HAL_Delay(5);
-				} else {
-					BSP_LED_On(LED_RED);
-				}
+				memcpy(alawRx, rtpFrame + 12, FRAME_SIZE);
+				alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
+				CIRC_BUFFER_push(&circ_buffer, &frame);
 				i++;
 			}
 
 		}
+
 		f_close(&fp);
+
 	}
 
 	BSP_LED_Init(LED_GREEN);
