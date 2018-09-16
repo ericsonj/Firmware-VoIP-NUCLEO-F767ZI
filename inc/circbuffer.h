@@ -21,15 +21,22 @@ typedef struct {
 	uint32_t length;
 	uint32_t head;
 	uint32_t tail;
+	uint32_t residual;
+	bool buferring;
 } circ_buffer_t;
 
 void CIRC_BUFFER_Init(circ_buffer_t *cbuffer_t, void *buffer,
 		size_t element_size, uint32_t length);
+
+void CIRC_BUFFER_InitRecidual(circ_buffer_t *cbuffer_t, void *buffer,
+		size_t element_size, uint32_t length, uint32_t residual);
 
 int32_t CIRC_BUFFER_push(circ_buffer_t *cbuffer_t, void *data);
 
 int32_t CIRC_BUFFER_pop(circ_buffer_t *cbuffer_t, void *data);
 
 bool CIRC_BUFFER_hasSpace(circ_buffer_t *cbuffer_t);
+
+uint32_t CIRC_BUFFER_elementsInBuffer(circ_buffer_t *cbuffer_t);
 
 #endif /* CIRCBUFFER_H */

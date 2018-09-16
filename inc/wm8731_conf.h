@@ -18,6 +18,7 @@
 //#define _WM8731_AnalogAudio 	0xD0;			// DAC Select
 //#define _WM8731_AnalogAudio		0x24			// sideTone Select
 #define _WM8731_AnalogAudio		0x14			// DAC Select
+//#define _WM8731_AnalogAudio		0x05			// DAC Select
 #define _WM8731_DigitalAudio 	0x06
 #define _WM8731_power 			0x00			// Disable Power down
 #define _WM8731_DAIF 			0x40			// Enable Master Mode and 16bit data

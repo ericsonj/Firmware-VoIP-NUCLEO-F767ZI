@@ -47,6 +47,7 @@
 #include "ff.h"
 #include "circbuffer.h"
 #include "rtp.h"
+#include "private.h"
 
 /* USER CODE BEGIN Includes */
 
@@ -80,7 +81,7 @@ typedef struct {
 	SHORT audioFrame[FRAME_SIZE];
 } frame_t;
 
-frame_t AudioBuffer[AUDIO_BUFFER_SIZE];
+frame_t AudioBuffer[50];
 frame_t AUdioBufferMic[AUDIO_BUFFER_SIZE];
 
 uint32_t frameCount = 1;
@@ -134,6 +135,18 @@ void WM8731_Deactivate() {
  * @retval None
  */
 
+static void frameToAlaw(BYTE *out, SHORT *pcm, uint32_t len) {
+	for (int i = 0; i < len; i++) {
+		out[i] = (BYTE) linear2alaw(pcm[i]);
+	}
+}
+
+static void alawtoFrame(SHORT *pcm, BYTE *in, uint32_t len) {
+	for (int i = 0; i < len; i++) {
+		pcm[i] = (SHORT) alaw2linear(in[i]);
+	}
+}
+
 int main(void) {
 	/* USER CODE BEGIN 1 */
 
@@ -147,14 +160,15 @@ int main(void) {
 
 	bufferTx[11] = 0x8001;
 
-	CIRC_BUFFER_Init(&circ_buffer, AudioBuffer, sizeof(AudioBuffer[0]),
-	AUDIO_BUFFER_SIZE);
+	CIRC_BUFFER_InitRecidual(&circ_buffer, AudioBuffer, sizeof(AudioBuffer[0]),
+			50, 40);
 
 	CIRC_BUFFER_Init(&circ_buffer_mic, AUdioBufferMic,
 			sizeof(AUdioBufferMic[0]), AUDIO_BUFFER_SIZE);
 
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
+	BSP_LED_Init(LED_RED);
 
 	/* USER CODE BEGIN Init */
 
@@ -201,53 +215,71 @@ int main(void) {
 	/* USER CODE BEGIN WHILE */
 	/* USER CODE END WHILE */
 
+	frame_t frame;
+	frame_t frameMic;
+
+	uint8_t rtpFrame[172];
+	uint8_t rtpFrameRx[172];
+	RTP_AddHeader(rtpFrame);
+
+	while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET) {
+	}
+
+	HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*) bufferTx,
+			(uint8_t*) bufferRx, sizeof(bufferTx) / 2);
+
+	BYTE alaw[FRAME_SIZE];
+	BYTE alawRx[FRAME_SIZE];
+	UINT num_write;
+
 	if (f_mount(&fs, "", 0) != FR_OK) {
 	}
 
-//	SHORT buff[512];
-	/* Create/open a file, then write a string and close it */
-	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_OPEN_ALWAYS) == FR_OK) {
+	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
 
-		if (f_open(&fp_mic, FILENAME_MIC, FA_READ | FA_WRITE | FA_OPEN_ALWAYS)
-				== FR_OK) {
+		for (int i = 0; i < 1800;) {
 
-			UINT num_read = 0;
-			UINT num_write = 0;
-			frame_t frame;
-			frame_t frameMic;
-			FRESULT res = f_read(&fp, frame.audioFrame, FRAME_SIZE * 2,
-					&num_read);
-			CIRC_BUFFER_push(&circ_buffer, &frame);
+//			HAL_UART_Init(&huart3);
+//		bzero(rtpFrameRx, 172);
+//		HAL_StatusTypeDef resprx;
+//		resprx = HAL_UART_Receive(&huart3, (uint8_t*) rtpFrameRx, 172, 20);
+//		if (resprx == HAL_OK && rtpFrameRx[0] == 0x80) {
+//			memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
+//			alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
+//			CIRC_BUFFER_push(&circ_buffer, &frame);
+//		}
 
-			while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET) {
+			for (int i = 0; i < 172; ++i) {
+				rtpFrameRx[i] = 0;
 			}
 
-			HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*) bufferTx,
-					(uint8_t*) bufferRx, sizeof(bufferTx) / 2);
-
-			do {
-				res = f_read(&fp, frame.audioFrame, FRAME_SIZE * 2, &num_read);
-				bool canPush = false;
-				while (!canPush) {
-					canPush = CIRC_BUFFER_hasSpace(&circ_buffer);
-					if (canPush) {
+			int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
+			if (err == ACTION_BUFFER_OK) {
+				frameToAlaw(alaw, frameMic.audioFrame, FRAME_SIZE);
+				RTP_AddVarHeader(rtpFrame);
+				memcpy(rtpFrame + 12, alaw, FRAME_SIZE);
+				HAL_UART_Init(&huart3);
+				HAL_UART_Transmit(&huart3, (uint8_t*) rtpFrame, 172, 5);
+				HAL_StatusTypeDef res;
+				res = HAL_UART_Receive(&huart3, (uint8_t*) rtpFrameRx, 172, 15);
+				HAL_Delay(5);
+				if (res == HAL_OK) {
+					if (rtpFrame[0] == 0x80) {
+						memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
+						f_write(&fp, rtpFrameRx, 172, &num_write);
+						alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
 						CIRC_BUFFER_push(&circ_buffer, &frame);
 					} else {
-						HAL_Delay(4);
+						BSP_LED_On(LED_RED);
 					}
+					HAL_Delay(5);
+				} else {
+					BSP_LED_On(LED_RED);
 				}
+				i++;
+			}
 
-				int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
-				if (err == ACTION_BUFFER_OK) {
-					f_write(&fp_mic, frameMic.audioFrame, FRAME_SIZE * 2,
-							&num_write);
-				}
-
-			} while (num_read == FRAME_SIZE * 2);
-
-			f_close(&fp_mic);
 		}
-
 		f_close(&fp);
 	}
 
@@ -355,7 +387,7 @@ static void MX_USART3_UART_Init(void) {
 	huart3.Init.Parity = UART_PARITY_NONE;
 	huart3.Init.Mode = UART_MODE_TX_RX;
 	huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-	huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+	huart3.Init.OverSampling = UART_OVERSAMPLING_8;
 	huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
 	huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
 	if (HAL_UART_Init(&huart3) != HAL_OK) {
@@ -476,13 +508,13 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : PD8 PD9 */
-	GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
-	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-	GPIO_InitStruct.Alternate = GPIO_AF7_USART3;
-	HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+//	/*Configure GPIO pins : PD8 PD9 */
+//	GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+//	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+//	GPIO_InitStruct.Pull = GPIO_NOPULL;
+//	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+//	GPIO_InitStruct.Alternate = GPIO_AF7_USART3;
+//	HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
 	/*Configure GPIO pin : PG6 */
 	GPIO_InitStruct.Pin = GPIO_PIN_6;
@@ -535,6 +567,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 
 		frame_t frame;
 		frame_t frameMic;
+
 		int32_t err = CIRC_BUFFER_pop(&circ_buffer, &frame);
 		if (err == ACTION_BUFFER_OK) {
 			memcpy(audioFrame, frame.audioFrame, 320);
@@ -553,7 +586,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 
 	if (icount % 2 == 0) {
 		bufferTx[11] = audioFrame[frameIndex];
-		audioFrameMic[frameIndex] = bufferRx[11];
+		audioFrameMic[frameIndex] = bufferRx[11] * 100;
 		frameIndex++;
 	}
 	icount++;
