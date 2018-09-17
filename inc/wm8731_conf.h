@@ -13,8 +13,8 @@
  **************************************************************************************************/
 #define _WM8731_left_lineIn 	0x0180		// Mic settings: Enable mute, Enable simultaneous load to left and right channels
 #define _WM8731_Right_lineIn 	0x0180 		// Mic settings: Enable mute, Enable simultaneous load to left and right channels
-#define _WM8731_Left_hp 		0x00F9		// Headphone settings : -9dB output
-#define _WM8731_Right_hp 		0x00F9		// Headphone settings : -9dB output
+#define _WM8731_Left_hp 		0x00F2		// Headphone settings : -9dB output
+#define _WM8731_Right_hp 		0x00F2		// Headphone settings : -9dB output
 //#define _WM8731_AnalogAudio 	0xD0;			// DAC Select
 //#define _WM8731_AnalogAudio		0x24			// sideTone Select
 #define _WM8731_AnalogAudio		0x14			// DAC Select

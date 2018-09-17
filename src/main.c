@@ -54,25 +54,38 @@
 /* USER CODE END Includes */
 
 /* Private variables ---------------------------------------------------------*/
-
+#define SIZE 192
 #define FRAME_SIZE 160
 #define AUDIO_BUFFER_SIZE 10
 #define FILENAME "audio.raw"
 #define FILENAME_MIC "mic.raw"
 
+typedef enum {
+	WAIT_DATA, WAIT_TYPE, WAIT_LEN, READ_BYTES, TRANSMIT
+} rxState_t;
+
 SPI_HandleTypeDef hspi3;
 DMA_HandleTypeDef hdma_spi3_tx;
 DMA_HandleTypeDef hdma_spi3_rx;
 
-UART_HandleTypeDef huart3;
-DMA_HandleTypeDef hdma_usart3_rx;
-DMA_HandleTypeDef hdma_usart3_tx;
+SPI_HandleTypeDef hspi4;
+DMA_HandleTypeDef hdma_spi4_rx;
+DMA_HandleTypeDef hdma_spi4_tx;
 
 uint16_t bufferTx[12];
 uint16_t bufferRx[12];
 
 SHORT audioFrame[FRAME_SIZE];
 SHORT audioFrameMic[FRAME_SIZE];
+
+static void loadBuffer(SPI_HandleTypeDef *hspi);
+static void readBuffer(SPI_HandleTypeDef *hspi);
+
+uint8_t UDPbufferTx[SIZE];
+uint8_t UDPbufferRx[SIZE];
+uint8_t count = 1;
+bool hasRTPDataTx = false;
+bool hasRTPDataRx = false;
 
 circ_buffer_t circ_buffer;
 circ_buffer_t circ_buffer_mic;
@@ -106,7 +119,15 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_SPI3_Init(void);
-static void MX_USART3_UART_Init(void);
+static void MX_SPI4_Init(void);
+
+// BUFFERS TX/RX RTP
+uint8_t rtpFrameTx[172];
+uint8_t rtpFrameRx[172];
+uint8_t rtpFrameRxIdx = 0;
+
+rxState_t rxState = WAIT_DATA;
+uint8_t rxLenCount = 0;
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
@@ -205,7 +226,7 @@ int main(void) {
 
 	MX_DMA_Init();
 	MX_SPI3_Init();
-	MX_USART3_UART_Init();
+	MX_SPI4_Init();
 	RTP_Init();
 
 	/* USER CODE BEGIN 2 */
@@ -218,43 +239,48 @@ int main(void) {
 	frame_t frame;
 	frame_t frameMic;
 
-	uint8_t rtpFrame[172];
-	uint8_t rtpFrameRx[172];
-	RTP_AddHeader(rtpFrame);
+	//uint8_t rtpFrameRx[172];
+	RTP_AddHeader(rtpFrameTx);
 
+	BYTE alaw[FRAME_SIZE];
+	BYTE alawRx[FRAME_SIZE];
+	UINT num_write;
 
 	while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET) {
 	}
 	HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*) bufferTx,
 			(uint8_t*) bufferRx, sizeof(bufferTx) / 2);
 
-	BYTE alaw[FRAME_SIZE];
-	BYTE alawRx[FRAME_SIZE];
-	UINT num_write;
+//	if (f_mount(&fs, "", 0) != FR_OK) {
+//	}
 
-	if (f_mount(&fs, "", 0) != FR_OK) {
+//	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
+
+	while (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_11) == GPIO_PIN_RESET) {
 	}
+	HAL_SPI_TransmitReceive_DMA(&hspi4, UDPbufferTx, UDPbufferRx, SIZE);
 
-	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
+	for (int i = 0; i < 1800;) {
 
-		for (int i = 0; i < 1800;) {
-
-			int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
-			if (err == ACTION_BUFFER_OK) {
-				frameToAlaw(alaw, frameMic.audioFrame, FRAME_SIZE);
-				RTP_AddVarHeader(rtpFrame);
-				memcpy(rtpFrame + 12, alaw, FRAME_SIZE);
-				memcpy(alawRx, rtpFrame + 12, FRAME_SIZE);
-				alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
-				CIRC_BUFFER_push(&circ_buffer, &frame);
-				i++;
-			}
-
+		int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
+		if (err == ACTION_BUFFER_OK) {
+			frameToAlaw(alaw, frameMic.audioFrame, FRAME_SIZE);
+			RTP_AddVarHeader(rtpFrameTx);
+			memcpy(rtpFrameTx + 12, alaw, FRAME_SIZE);
+			hasRTPDataTx = true;
+			i++;
 		}
-
-		f_close(&fp);
-
+		if (hasRTPDataRx) {
+			memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
+			alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
+			CIRC_BUFFER_push(&circ_buffer, &frame);
+			hasRTPDataRx = false;
+		}
 	}
+
+//	f_close(&fp);
+
+//	}
 
 	BSP_LED_Init(LED_GREEN);
 	BSP_LED_On(LED_GREEN);
@@ -350,22 +376,28 @@ static void MX_SPI3_Init(void) {
 
 }
 
-/* USART3 init function */
-static void MX_USART3_UART_Init(void) {
+/* SPI4 init function */
+static void MX_SPI4_Init(void) {
 
-	huart3.Instance = USART3;
-	huart3.Init.BaudRate = 921600;
-	huart3.Init.WordLength = UART_WORDLENGTH_8B;
-	huart3.Init.StopBits = UART_STOPBITS_1;
-	huart3.Init.Parity = UART_PARITY_NONE;
-	huart3.Init.Mode = UART_MODE_TX_RX;
-	huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-	huart3.Init.OverSampling = UART_OVERSAMPLING_8;
-	huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-	huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-	if (HAL_UART_Init(&huart3) != HAL_OK) {
+	/* SPI4 parameter configuration*/
+	hspi4.Instance = SPI4;
+	hspi4.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+	hspi4.Init.Mode = SPI_MODE_SLAVE;
+	hspi4.Init.Direction = SPI_DIRECTION_2LINES;
+	hspi4.Init.DataSize = SPI_DATASIZE_8BIT;
+	hspi4.Init.CLKPolarity = SPI_POLARITY_LOW;
+	hspi4.Init.CLKPhase = SPI_PHASE_1EDGE;
+	hspi4.Init.NSS = SPI_NSS_HARD_INPUT;
+	hspi4.Init.FirstBit = SPI_FIRSTBIT_MSB;
+	hspi4.Init.TIMode = SPI_TIMODE_DISABLE;
+	hspi4.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+	hspi4.Init.CRCPolynomial = 7;
+	hspi4.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+	hspi4.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+	if (HAL_SPI_Init(&hspi4) != HAL_OK) {
 		_Error_Handler(__FILE__, __LINE__);
 	}
+
 }
 
 /**
@@ -376,22 +408,24 @@ static void MX_DMA_Init(void) {
 	/* DMA controller clock enable */
 	__HAL_RCC_DMA1_CLK_ENABLE()
 	;
-
 	/* DMA interrupt init */
 	/* DMA1_Stream0_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 0, 0);
+	HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 2, 0);
 	HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
 	/* DMA1_Stream5_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 0, 0);
+	HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 2, 0);
 	HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
 
+	/* DMA controller clock enable */
+	__HAL_RCC_DMA2_CLK_ENABLE()
+	;
 	/* DMA interrupt init */
-	/* DMA1_Stream1_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
-	/* DMA1_Stream3_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
+	/* DMA2_Stream0_IRQn interrupt configuration */
+	HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
+	/* DMA2_Stream1_IRQn interrupt configuration */
+	HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
 
 }
 
@@ -436,6 +470,8 @@ static void MX_GPIO_Init(void) {
 	__HAL_RCC_GPIOG_CLK_ENABLE()
 	;
 	__HAL_RCC_GPIOF_CLK_ENABLE()
+	;
+	__HAL_RCC_GPIOE_CLK_ENABLE()
 	;
 
 	/*Configure GPIO pin Output Level */
@@ -534,37 +570,115 @@ static void MX_GPIO_Init(void) {
 
 }
 
+static void readBuffer(SPI_HandleTypeDef *hspi) {
+	uint16_t offset = (SIZE - (uint8_t) hspi->hdmarx->Instance->NDTR);
+	for (int i = 0; i < SIZE; ++i) {
+		switch (rxState) {
+		case WAIT_DATA:
+			if (UDPbufferRx[offset % SIZE] == 0x84) {
+				rxState = WAIT_TYPE;
+			}
+			break;
+		case WAIT_TYPE:
+			if (UDPbufferRx[offset % SIZE] == 0x00) {
+				rxState = WAIT_LEN;
+			} else {
+				rxState = WAIT_DATA;
+			}
+			break;
+		case WAIT_LEN:
+			rxLenCount = UDPbufferRx[offset % SIZE];
+			if (rxLenCount == 0) {
+				rxState = WAIT_DATA;
+			} else {
+				rtpFrameRxIdx = 0;
+				rxState = READ_BYTES;
+			}
+			break;
+		case READ_BYTES:
+			rtpFrameRx[rtpFrameRxIdx] = UDPbufferRx[offset % SIZE];
+			rtpFrameRxIdx++;
+			rxLenCount--;
+			if (rxLenCount == 0) {
+				rxState = TRANSMIT;
+			}
+			break;
+		case TRANSMIT:
+			hasRTPDataRx = true;
+			rxState = WAIT_DATA;
+			break;
+		}
+		offset++;
+	}
+}
+
+static void loadBuffer(SPI_HandleTypeDef *hspi) {
+
+	uint16_t offset = (SIZE - (uint8_t) hspi->hdmatx->Instance->NDTR) + 1;
+	UDPbufferTx[offset++] = 0x84; // init data
+	UDPbufferTx[offset++] = 0x00; // type
+	UDPbufferTx[offset++] = 0xAC; // 172 len
+	uint16_t i = 0;
+	while (i < 172) {
+		UDPbufferTx[offset % SIZE] = rtpFrameTx[i];
+		offset++;
+		i++;
+	}
+
+}
+
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 
-	if (frameIndex >= 160) {
+	if (hspi->Instance == SPI3) {
 
-		frame_t frame;
-		frame_t frameMic;
+		if (frameIndex >= 160) {
 
-		int32_t err = CIRC_BUFFER_pop(&circ_buffer, &frame);
-		if (err == ACTION_BUFFER_OK) {
-			memcpy(audioFrame, frame.audioFrame, 320);
-		} else {
-			bzero(audioFrame, sizeof(audioFrame));
+			frame_t frame;
+			frame_t frameMic;
+
+			int32_t err = CIRC_BUFFER_pop(&circ_buffer, &frame);
+			if (err == ACTION_BUFFER_OK) {
+				memcpy(audioFrame, frame.audioFrame, 320);
+			} else {
+				bzero(audioFrame, sizeof(audioFrame));
+			}
+
+			bzero(frameMic.audioFrame, sizeof(frameMic.audioFrame));
+			if (CIRC_BUFFER_hasSpace(&circ_buffer_mic)) {
+				memcpy(frameMic.audioFrame, audioFrameMic, 320);
+				CIRC_BUFFER_push(&circ_buffer_mic, &frameMic);
+			}
+			frameIndex = 0;
+
 		}
 
-		bzero(frameMic.audioFrame, sizeof(frameMic.audioFrame));
-		if (CIRC_BUFFER_hasSpace(&circ_buffer_mic)) {
-			memcpy(frameMic.audioFrame, audioFrameMic, 320);
-			CIRC_BUFFER_push(&circ_buffer_mic, &frameMic);
+		if (icount % 2 == 0) {
+			bufferTx[11] = audioFrame[frameIndex];
+			audioFrameMic[frameIndex] = bufferRx[11] * 100;
+			frameIndex++;
 		}
-		frameIndex = 0;
+		icount++;
+		GPIOF->ODR ^= GPIO_PIN_12;
 
 	}
 
-	if (icount % 2 == 0) {
-		bufferTx[11] = audioFrame[frameIndex];
-		audioFrameMic[frameIndex] = bufferRx[11] * 100;
-		frameIndex++;
+	if (hspi->Instance == SPI4) {
+		memset(UDPbufferTx, 0, SIZE);
+		if (hasRTPDataTx) {
+			loadBuffer(hspi);
+			hasRTPDataTx = false;
+		}
+		readBuffer(hspi);
 	}
-	icount++;
 
-	GPIOF->ODR ^= GPIO_PIN_12;
+}
+
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
+	if (hspi->Instance == SPI4) {
+		while (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_11) != GPIO_PIN_SET) // CS signal
+		{
+		}
+	}
 }
 
 void HAL_SPI_TxRxHalfCpltCallback(SPI_HandleTypeDef *hspi) {
