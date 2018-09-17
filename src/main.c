@@ -83,6 +83,8 @@ static void readBuffer(SPI_HandleTypeDef *hspi);
 
 uint8_t UDPbufferTx[SIZE];
 uint8_t UDPbufferRx[SIZE];
+uint8_t DEBUGFrameRx[SIZE];
+uint8_t DEBUGFrameRx2[SIZE];
 uint8_t count = 1;
 bool hasRTPDataTx = false;
 bool hasRTPDataRx = false;
@@ -246,41 +248,42 @@ int main(void) {
 	BYTE alawRx[FRAME_SIZE];
 	UINT num_write;
 
+	while (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_11) == GPIO_PIN_RESET) {
+	}
+	HAL_SPI_TransmitReceive_DMA(&hspi4, UDPbufferTx, UDPbufferRx, SIZE);
+
 	while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET) {
 	}
 	HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*) bufferTx,
 			(uint8_t*) bufferRx, sizeof(bufferTx) / 2);
 
-//	if (f_mount(&fs, "", 0) != FR_OK) {
-//	}
-
-//	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
-
-	while (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_11) == GPIO_PIN_RESET) {
-	}
-	HAL_SPI_TransmitReceive_DMA(&hspi4, UDPbufferTx, UDPbufferRx, SIZE);
-
-	for (int i = 0; i < 1800;) {
-
-		int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
-		if (err == ACTION_BUFFER_OK) {
-			frameToAlaw(alaw, frameMic.audioFrame, FRAME_SIZE);
-			RTP_AddVarHeader(rtpFrameTx);
-			memcpy(rtpFrameTx + 12, alaw, FRAME_SIZE);
-			hasRTPDataTx = true;
-			i++;
-		}
-		if (hasRTPDataRx) {
-			memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
-			alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
-			CIRC_BUFFER_push(&circ_buffer, &frame);
-			hasRTPDataRx = false;
-		}
+	if (f_mount(&fs, "", 0) != FR_OK) {
 	}
 
-//	f_close(&fp);
+	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
 
-//	}
+		for (int i = 0; i < 1800;) {
+
+			int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
+			if (err == ACTION_BUFFER_OK) {
+				frameToAlaw(alaw, frameMic.audioFrame, FRAME_SIZE);
+				RTP_AddVarHeader(rtpFrameTx);
+				memcpy(rtpFrameTx + 12, alaw, FRAME_SIZE);
+				hasRTPDataTx = true;
+				i++;
+			}
+			if (hasRTPDataRx) {
+				memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
+				f_write(&fp, alawRx, FRAME_SIZE, &num_write);
+				alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
+				CIRC_BUFFER_push(&circ_buffer, &frame);
+				hasRTPDataRx = false;
+			}
+		}
+
+		f_close(&fp);
+
+	}
 
 	BSP_LED_Init(LED_GREEN);
 	BSP_LED_On(LED_GREEN);
@@ -410,10 +413,10 @@ static void MX_DMA_Init(void) {
 	;
 	/* DMA interrupt init */
 	/* DMA1_Stream0_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 2, 0);
+	HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 0, 0);
 	HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
 	/* DMA1_Stream5_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 2, 0);
+	HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 0, 0);
 	HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
 
 	/* DMA controller clock enable */
@@ -421,10 +424,10 @@ static void MX_DMA_Init(void) {
 	;
 	/* DMA interrupt init */
 	/* DMA2_Stream0_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
+	HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 3, 0);
 	HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
 	/* DMA2_Stream1_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 0, 0);
+	HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 3, 0);
 	HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
 
 }
@@ -572,22 +575,23 @@ static void MX_GPIO_Init(void) {
 
 static void readBuffer(SPI_HandleTypeDef *hspi) {
 	uint16_t offset = (SIZE - (uint8_t) hspi->hdmarx->Instance->NDTR);
-	for (int i = 0; i < SIZE; ++i) {
+	memcpy(DEBUGFrameRx, UDPbufferRx, SIZE); // KEY FOR BETTER
+	for (int i = offset; i < SIZE; i++) {
 		switch (rxState) {
 		case WAIT_DATA:
-			if (UDPbufferRx[offset % SIZE] == 0x84) {
+			if (DEBUGFrameRx[offset % SIZE] == 0x84) {
 				rxState = WAIT_TYPE;
 			}
 			break;
 		case WAIT_TYPE:
-			if (UDPbufferRx[offset % SIZE] == 0x00) {
+			if (DEBUGFrameRx[offset % SIZE] == 0x00) {
 				rxState = WAIT_LEN;
 			} else {
 				rxState = WAIT_DATA;
 			}
 			break;
 		case WAIT_LEN:
-			rxLenCount = UDPbufferRx[offset % SIZE];
+			rxLenCount = DEBUGFrameRx[offset % SIZE];
 			if (rxLenCount == 0) {
 				rxState = WAIT_DATA;
 			} else {
@@ -596,7 +600,7 @@ static void readBuffer(SPI_HandleTypeDef *hspi) {
 			}
 			break;
 		case READ_BYTES:
-			rtpFrameRx[rtpFrameRxIdx] = UDPbufferRx[offset % SIZE];
+			rtpFrameRx[rtpFrameRxIdx] = DEBUGFrameRx[offset % SIZE];
 			rtpFrameRxIdx++;
 			rxLenCount--;
 			if (rxLenCount == 0) {
@@ -660,9 +664,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 		icount++;
 		GPIOF->ODR ^= GPIO_PIN_12;
 
-	}
-
-	if (hspi->Instance == SPI4) {
+	} else if (hspi->Instance == SPI4) {
 		memset(UDPbufferTx, 0, SIZE);
 		if (hasRTPDataTx) {
 			loadBuffer(hspi);
