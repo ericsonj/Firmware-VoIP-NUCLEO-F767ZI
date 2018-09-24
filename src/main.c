@@ -257,33 +257,33 @@ int main(void) {
 	HAL_SPI_TransmitReceive_DMA(&hspi3, (uint8_t*) bufferTx,
 			(uint8_t*) bufferRx, sizeof(bufferTx) / 2);
 
-	if (f_mount(&fs, "", 0) != FR_OK) {
-	}
+//	if (f_mount(&fs, "", 0) != FR_OK) {
+//	}
 
-	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
+//	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
 
-		for (int i = 0; i < 1800;) {
+	for (int i = 0; i < 1800;) {
 
-			int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
-			if (err == ACTION_BUFFER_OK) {
-				frameToAlaw(alaw, frameMic.audioFrame, FRAME_SIZE);
-				RTP_AddVarHeader(rtpFrameTx);
-				memcpy(rtpFrameTx + 12, alaw, FRAME_SIZE);
-				hasRTPDataTx = true;
-				i++;
-			}
-			if (hasRTPDataRx) {
-				memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
-				f_write(&fp, alawRx, FRAME_SIZE, &num_write);
-				alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
-				CIRC_BUFFER_push(&circ_buffer, &frame);
-				hasRTPDataRx = false;
-			}
+		int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
+		if (err == ACTION_BUFFER_OK) {
+			frameToAlaw(alaw, frameMic.audioFrame, FRAME_SIZE);
+			RTP_AddVarHeader(rtpFrameTx);
+			memcpy(rtpFrameTx + 12, alaw, FRAME_SIZE);
+			hasRTPDataTx = true;
+			i++;
 		}
-
-		f_close(&fp);
-
+		if (hasRTPDataRx) {
+			memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
+//				f_write(&fp, alawRx, FRAME_SIZE, &num_write);
+			alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
+			CIRC_BUFFER_push(&circ_buffer, &frame);
+			hasRTPDataRx = false;
+		}
 	}
+
+//		f_close(&fp);
+
+//	}
 
 	BSP_LED_Init(LED_GREEN);
 	BSP_LED_On(LED_GREEN);
