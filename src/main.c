@@ -106,6 +106,8 @@ uint8_t bufferId = 0;
 bool bufferReady = false;
 bool endFrame = false;
 
+bool sendRTCP = true;
+
 //static uint32_t ms_ticks; /**< 1ms timeticks counter */
 static FATFS fs; /**< FatFs work area needed for each volume */
 static FIL fp; /**< File object needed for each open file */
@@ -628,6 +630,51 @@ static void loadBuffer(SPI_HandleTypeDef *hspi) {
 		offset++;
 		i++;
 	}
+}
+
+static void loadRTCP(SPI_HandleTypeDef *hspi) {
+
+	char *cname = "1005@ericsonj.net";
+	uint8_t cnameLen = strlen(cname);
+	uint8_t dataLen = cnameLen + 10;
+	uint16_t rtcplen = (dataLen / 4) + ((dataLen % 4) > 0 ? 1 : 0) - 1;
+
+	uint16_t offset = (SIZE - (uint8_t) hspi->hdmatx->Instance->NDTR) + 1;
+	UDPbufferTx[offset++] = 0x84; // init data
+	UDPbufferTx[offset++] = 0x00; // type
+	UDPbufferTx[offset++] = dataLen; // 172 len
+	UDPbufferTx[offset++] = 0x81; // RTCP
+	UDPbufferTx[offset++] = 0xCA; // SDES
+
+	uint8_t hight = rtcplen & 0xFF00;
+	hight >>= 8;
+	UDPbufferTx[offset++] = hight;
+	uint8_t low = rtcplen & 0x000FF;
+	UDPbufferTx[offset++] = low;
+
+	uint32_t ssrc = 666;
+	uint8_t b;
+	b = ssrc & 0xFF000000;
+	b >>= 24;
+	UDPbufferTx[offset++] = b;
+
+	b = ssrc & 0x00FF0000;
+	b >>= 16;
+	UDPbufferTx[offset++] = b;
+
+	b = ssrc & 0x0000FF00;
+	b >>= 8;
+	UDPbufferTx[offset++] = b;
+
+	b = ssrc & 0x000000FF;
+	UDPbufferTx[offset++] = b;
+
+	UDPbufferTx[offset++] = 0x01;
+	UDPbufferTx[offset++] = cnameLen;
+
+	for (int i = 0; i < cnameLen; ++i) {
+		UDPbufferTx[offset++] = cname[i];
+	}
 
 }
 
@@ -669,6 +716,9 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 		if (hasRTPDataTx) {
 			loadBuffer(hspi);
 			hasRTPDataTx = false;
+		} else if (sendRTCP) {
+			loadRTCP(hspi);
+			sendRTCP = false;
 		}
 		readBuffer(hspi);
 	}
