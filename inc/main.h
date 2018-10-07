@@ -72,7 +72,11 @@ void _Error_Handler(char *, int);
 #define STLK_RX_GPIO_Port GPIOB
 #define STLK_TX_Pin GPIO_PIN_11
 #define STLK_TX_GPIO_Port GPIOB
-
+#define CALL_BUTTON_Pin GPIO_PIN_1
+#define CALL_BUTTON_GPIO_Port GPIOG
+#define CALL_BUTTON_EXTI_IRQn EXTI1_IRQn
+#define LD2_Pin GPIO_PIN_7
+#define LD2_GPIO_Port GPIOB
 
 #ifdef __cplusplus
 }

@@ -48,6 +48,7 @@
 #include "circbuffer.h"
 #include "rtp.h"
 #include "private.h"
+#include "ej_gpiolib.h"
 
 /* USER CODE BEGIN Includes */
 
@@ -96,7 +97,7 @@ typedef struct {
 	SHORT audioFrame[FRAME_SIZE];
 } frame_t;
 
-frame_t AudioBuffer[50];
+frame_t AudioBuffer[120];
 frame_t AUdioBufferMic[AUDIO_BUFFER_SIZE];
 
 uint32_t frameCount = 1;
@@ -133,6 +134,7 @@ uint8_t rtpFrameRxIdx = 0;
 rxState_t rxState = WAIT_DATA;
 uint8_t rxLenCount = 0;
 
+uint8_t lagCount = 0;
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
 
@@ -186,7 +188,7 @@ int main(void) {
 	bufferTx[11] = 0x8001;
 
 	CIRC_BUFFER_InitRecidual(&circ_buffer, AudioBuffer, sizeof(AudioBuffer[0]),
-			50, 40);
+			120, 110);
 
 	CIRC_BUFFER_Init(&circ_buffer_mic, AUdioBufferMic,
 			sizeof(AUdioBufferMic[0]), AUDIO_BUFFER_SIZE);
@@ -208,6 +210,7 @@ int main(void) {
 
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
+	EJ_GPIO_Init();
 
 	HAL_Delay(100);
 
@@ -248,7 +251,6 @@ int main(void) {
 
 	BYTE alaw[FRAME_SIZE];
 	BYTE alawRx[FRAME_SIZE];
-	UINT num_write;
 
 	while (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_11) == GPIO_PIN_RESET) {
 	}
@@ -264,15 +266,24 @@ int main(void) {
 
 //	if (f_open(&fp, FILENAME, FA_READ | FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
 
-	for (int i = 0; i < 1800;) {
+	button_t *callButton = EJ_GPIO_GetButton();
+
+	BSP_LED_Init(LED_GREEN);
+	BSP_LED_Init(LED_RED);
+	BSP_LED_On(LED_GREEN);
+
+	uint32_t ticksKeepAlive = 0;
+	uint32_t nowTicks = 0;
+
+	for (;;) {
 
 		int32_t err = CIRC_BUFFER_pop(&circ_buffer_mic, &frameMic);
-		if (err == ACTION_BUFFER_OK) {
+		if (err == ACTION_BUFFER_OK && callButton->state == BUTTON_DOWN) {
 			frameToAlaw(alaw, frameMic.audioFrame, FRAME_SIZE);
 			RTP_AddVarHeader(rtpFrameTx);
 			memcpy(rtpFrameTx + 12, alaw, FRAME_SIZE);
 			hasRTPDataTx = true;
-			i++;
+//			i++;
 		}
 		if (hasRTPDataRx) {
 			memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
@@ -281,14 +292,19 @@ int main(void) {
 			CIRC_BUFFER_push(&circ_buffer, &frame);
 			hasRTPDataRx = false;
 		}
+//		else {
+		nowTicks = HAL_GetTick();
+		if ((nowTicks - ticksKeepAlive) > 20000) {
+			ticksKeepAlive = nowTicks;
+			sendRTCP = true;
+		}
+//		}
+
 	}
 
 //		f_close(&fp);
 
 //	}
-
-	BSP_LED_Init(LED_GREEN);
-	BSP_LED_On(LED_GREEN);
 
 	while (1) {
 	}
@@ -426,10 +442,10 @@ static void MX_DMA_Init(void) {
 	;
 	/* DMA interrupt init */
 	/* DMA2_Stream0_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 3, 0);
+	HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 4, 0);
 	HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
 	/* DMA2_Stream1_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 3, 0);
+	HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 4, 0);
 	HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
 
 }
@@ -646,13 +662,13 @@ static void loadRTCP(SPI_HandleTypeDef *hspi) {
 	UDPbufferTx[offset++] = 0x81; // RTCP
 	UDPbufferTx[offset++] = 0xCA; // SDES
 
-	uint8_t hight = rtcplen & 0xFF00;
+	uint16_t hight = rtcplen & 0xFF00;
 	hight >>= 8;
-	UDPbufferTx[offset++] = hight;
+	UDPbufferTx[offset++] = (uint8_t) hight;
 	uint8_t low = rtcplen & 0x000FF;
 	UDPbufferTx[offset++] = low;
 
-	uint32_t ssrc = 666;
+	uint32_t ssrc = 16384;
 	uint8_t b;
 	b = ssrc & 0xFF000000;
 	b >>= 24;
@@ -687,11 +703,14 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 			frame_t frame;
 			frame_t frameMic;
 
-			int32_t err = CIRC_BUFFER_pop(&circ_buffer, &frame);
+			int32_t err;
+			err = CIRC_BUFFER_pop(&circ_buffer, &frame);
 			if (err == ACTION_BUFFER_OK) {
 				memcpy(audioFrame, frame.audioFrame, 320);
+				BSP_LED_Off(LED_RED);
 			} else {
 				bzero(audioFrame, sizeof(audioFrame));
+				BSP_LED_On(LED_RED);
 			}
 
 			bzero(frameMic.audioFrame, sizeof(frameMic.audioFrame));
@@ -705,11 +724,10 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 
 		if (icount % 2 == 0) {
 			bufferTx[11] = audioFrame[frameIndex];
-			audioFrameMic[frameIndex] = bufferRx[11] * 100;
+			audioFrameMic[frameIndex] = bufferRx[11] * 50;
 			frameIndex++;
 		}
 		icount++;
-		GPIOF->ODR ^= GPIO_PIN_12;
 
 	} else if (hspi->Instance == SPI4) {
 		memset(UDPbufferTx, 0, SIZE);
