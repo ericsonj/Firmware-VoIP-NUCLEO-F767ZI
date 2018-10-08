@@ -28,7 +28,7 @@ void EJ_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(CALL_BUTTON_GPIO_Port, &GPIO_InitStruct);
 
-	HAL_NVIC_SetPriority(EXTI1_IRQn, 15, 0);
+	HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
 	HAL_NVIC_EnableIRQ(EXTI1_IRQn);
 
 }

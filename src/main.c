@@ -286,10 +286,12 @@ int main(void) {
 //			i++;
 		}
 		if (hasRTPDataRx) {
-			memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
+			if (rtpFrameRx[0] == 0x80) {
+				memcpy(alawRx, rtpFrameRx + 12, FRAME_SIZE);
 //				f_write(&fp, alawRx, FRAME_SIZE, &num_write);
-			alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
-			CIRC_BUFFER_push(&circ_buffer, &frame);
+				alawtoFrame(frame.audioFrame, alawRx, FRAME_SIZE);
+				CIRC_BUFFER_push(&circ_buffer, &frame);
+			}
 			hasRTPDataRx = false;
 		}
 //		else {
@@ -707,10 +709,10 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 			err = CIRC_BUFFER_pop(&circ_buffer, &frame);
 			if (err == ACTION_BUFFER_OK) {
 				memcpy(audioFrame, frame.audioFrame, 320);
-				BSP_LED_Off(LED_RED);
+//				BSP_LED_Off(LED_RED);
 			} else {
 				bzero(audioFrame, sizeof(audioFrame));
-				BSP_LED_On(LED_RED);
+//				BSP_LED_On(LED_RED);
 			}
 
 			bzero(frameMic.audioFrame, sizeof(frameMic.audioFrame));
